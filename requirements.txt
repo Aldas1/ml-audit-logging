@@ -1,0 +1,11 @@
+pandas==3.0.2
+numpy==2.3.5
+scikit-learn==1.8.0
+matplotlib==3.10.9
+seaborn==0.13.2
+joblib==1.5.3
+pytest==9.0.3
+# lightgbm and xgboost require a C++ compiler — install on Google Colab:
+# pip install lightgbm==4.3.0 xgboost==2.0.3
+lightgbm==4.3.0
+xgboost==2.0.3
