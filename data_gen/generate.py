@@ -63,26 +63,10 @@ def generate_normal(
     sim_seconds: int,
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """Normal traffic with realistic variety.
-
-    Mix:
-      78% secrets reads  — primary k8s usage pattern
-      12% other resource reads (configmaps, pods, …)
-       8% secrets writes  — legitimate rotation / sync
-       2% RBAC list/get   — admin read-only checks
-
-    1.5% of events produce a 403 (transient permission failures).
-    Traffic follows a business-hour sine curve so some windows have
-    many events and some have very few — preventing trivial separation
-    on window size alone.
-    """
-    # Pre-assign event timestamps via business-hour density: peak 10h, trough 3h.
-    # Draw seconds-from-start with rejection sampling against a sine-shaped weight.
     timestamps: list[float] = []
     while len(timestamps) < count:
         s = rng.uniform(0, sim_seconds)
         hour = (s % 86400) / 3600
-        # weight in [0.25, 1.0]: high around 10h, low around 3h
         weight = 0.625 + 0.375 * math.sin(math.pi * (hour - 3) / 12)
         if rng.random() < weight:
             timestamps.append(s)
@@ -127,11 +111,6 @@ def generate_rbac_burst(
     start: datetime,
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """RBAC escalation: a single compromised SA creates rolebindings over ~3-4 minutes.
-
-    Events are spread wide enough (5–15 s gaps) to spill across 3–4 windows so
-    the anomaly signal per window is subtle (≈5–7 creates, vs. normal ≈0).
-    """
     events: list[dict[str, Any]] = []
     t = start
     attacker = rng.choice(_COMPROMISED_POOL)
@@ -156,12 +135,6 @@ def generate_spike_burst(
     start: datetime,
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """Secrets exfiltration spike: rapid reads by one account over 2–3 minutes.
-
-    10% failure rate (recon against namespaces with restricted access).
-    The last 20% of events form a slow recovery tail (wider gaps) simulating
-    the attacker decelerating before stopping. Total events stays at `count`.
-    """
     events: list[dict[str, Any]] = []
     t = start
     attacker = rng.choice(_COMPROMISED_POOL)
@@ -203,14 +176,6 @@ def generate_slow_recon(
     start: datetime,
     rng: random.Random,
 ) -> list[dict[str, Any]]:
-    """Slow reconnaissance: 3 rotating compromised accounts probing secrets over ~8 minutes.
-
-    Designed to challenge simpler models:
-    - per-window reads are only ~30-50% above the normal baseline (not a spike)
-    - 3 rotating accounts keep entropy_users ≈ 1.5 bits (normal ≈ 2.3 bits but varies)
-    - 6% failure rate (vs. normal 1.5%)
-    - spans 7–9 windows — the sustained, gradual nature is what distinguishes it
-    """
     events: list[dict[str, Any]] = []
     t = start
     attackers = rng.sample(_COMPROMISED_POOL, 3)
@@ -240,13 +205,6 @@ def generate_dataset(
     seed: int = 42,
     output_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Generate a labelled synthetic Kubernetes audit log dataset.
-
-    Three anomaly types keep ~100+ anomalous windows spread across all folds:
-      - RBAC escalation  (easy,   ~3-4 windows/burst)
-      - Secrets spike    (medium, ~2-3 windows/burst)
-      - Slow recon       (hard,   ~7-9 windows/burst)
-    """
     rng = random.Random(seed)
     sim_start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
     sim_seconds = _SIMULATION_HOURS * 3600
@@ -263,7 +221,6 @@ def generate_dataset(
     spike_times = burst_times[num_rbac_bursts : num_rbac_bursts + num_spike_bursts]
     recon_times = burst_times[num_rbac_bursts + num_spike_bursts :]
 
-    # Split anomaly budget: 40% RBAC, 35% spike, 25% recon
     rbac_budget = int(anomaly_count * 0.40)
     spike_budget = int(anomaly_count * 0.35)
     recon_budget = anomaly_count - rbac_budget - spike_budget
@@ -272,12 +229,15 @@ def generate_dataset(
     events_per_spike = max(1, spike_budget // num_spike_bursts)
     events_per_recon = max(1, recon_budget // num_recon_bursts)
 
-    for t in rbac_times:
-        events.extend(generate_rbac_burst(events_per_rbac, t, rng))
-    for t in spike_times:
-        events.extend(generate_spike_burst(events_per_spike, t, rng))
-    for t in recon_times:
-        events.extend(generate_slow_recon(events_per_recon, t, rng))
+    for i, t in enumerate(rbac_times):
+        extra = rbac_budget - events_per_rbac * num_rbac_bursts if i == len(rbac_times) - 1 else 0
+        events.extend(generate_rbac_burst(events_per_rbac + extra, t, rng))
+    for i, t in enumerate(spike_times):
+        extra = spike_budget - events_per_spike * num_spike_bursts if i == len(spike_times) - 1 else 0
+        events.extend(generate_spike_burst(events_per_spike + extra, t, rng))
+    for i, t in enumerate(recon_times):
+        extra = recon_budget - events_per_recon * num_recon_bursts if i == len(recon_times) - 1 else 0
+        events.extend(generate_slow_recon(events_per_recon + extra, t, rng))
 
     events.sort(key=lambda e: e["timestamp"])
 

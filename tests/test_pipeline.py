@@ -16,8 +16,6 @@ from pipeline.ingest import load_jsonl
 # ── data generation ──────────────────────────────────────────────────────────
 
 def test_generate_dataset_counts():
-    # normal_count is exact; anomaly_count is a budget distributed via floor-division
-    # across burst slots (min 1 event per slot), so actual count may differ slightly.
     events = generate_dataset(normal_count=200, anomaly_count=100, seed=42)
     normal = sum(1 for e in events if e["label"] == 0)
     anomalous = sum(1 for e in events if e["label"] == 1)
